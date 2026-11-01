@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<title>機材発送チェック</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<style>
+  :root { --ok:#2e9e3e; --ng:#d93025; --wait:#9aa0a6; --bg:#f5f6f7; --ink:#1f2328; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"Hiragino Sans","Yu Gothic UI",sans-serif; background:var(--bg); color:var(--ink); }
+  header { position:sticky; top:0; z-index:5; background:#fff; padding:10px 16px 8px; border-bottom:1px solid #ddd; }
+  h1 { font-size:17px; margin:0 0 2px; }
+  .sub { font-size:13px; color:#555; }
+  .bar { height:8px; background:#e3e5e8; border-radius:4px; margin-top:8px; overflow:hidden; }
+  .bar i { display:block; height:100%; width:0; background:var(--ok); transition:width .2s; }
+  .count { font-size:13px; margin-top:4px; }
+  .shot { display:block; margin:12px 16px 0; padding:22px 12px; text-align:center; font-size:18px; font-weight:bold;
+          color:#fff; background:#1a73e8; border-radius:12px; }
+  .shot.busy { background:#8ab4f8; }
+  .shot.sub-shot { padding:12px; font-size:15px; background:#fff; color:#1a73e8; border:1px solid #1a73e8; }
+  .live { display:block; margin:8px 16px 0; width:calc(100% - 32px); }
+  #cam[hidden], .live[hidden] { display:none; }
+  #cam { position:relative; background:#000; margin:12px 16px 0; border-radius:10px; overflow:hidden; aspect-ratio:4/3; }
+  #cam video { width:100%; height:100%; object-fit:cover; display:block; }
+  #cam .frame { position:absolute; inset:18% 22%; border:3px solid rgba(255,255,255,.8); border-radius:10px; }
+  #cam .msg { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#fff; padding:16px; text-align:center; font-size:14px; }
+  #toast { margin:10px 16px 0; padding:12px; border-radius:8px; font-weight:bold; display:none; font-size:15px; }
+  #toast.ok { display:block; background:#e6f4ea; color:var(--ok); }
+  #toast.ng { display:block; background:#fce8e6; color:var(--ng); border:2px solid var(--ng); }
+  #toast.info { display:block; background:#e8f0fe; color:#1a56c4; }
+  .manual { display:flex; gap:8px; margin:10px 16px 0; }
+  .manual input { flex:1; font-size:16px; padding:10px; border:1px solid #bbb; border-radius:8px; }
+  button { font-size:15px; padding:10px 14px; border-radius:8px; border:1px solid #bbb; background:#fff; }
+  ul { list-style:none; margin:12px 16px; padding:0; }
+  li { display:flex; align-items:center; gap:10px; background:#fff; border-radius:8px; padding:10px 12px; margin-bottom:6px; border-left:6px solid var(--wait); }
+  li.ok { border-left-color:var(--ok); background:#eef8f0; }
+  li.extra { border-left-color:var(--ng); background:#fdecea; }
+  li .no { font-weight:bold; min-width:44px; font-size:18px; }
+  li .nm { flex:1; font-size:15px; }
+  li .note { display:block; font-size:12px; color:#b06000; }
+  li .st { font-size:13px; white-space:nowrap; }
+  li.ok .st { color:var(--ok); font-weight:bold; }
+  h2 { font-size:14px; margin:16px 16px 0; color:#555; }
+  .ref li { border-left-color:#c8ccd0; color:#555; }
+  footer { position:sticky; bottom:0; background:#fff; padding:12px 16px calc(12px + env(safe-area-inset-bottom)); border-top:1px solid #ddd; }
+  #done { width:100%; font-size:18px; padding:14px; background:var(--ok); color:#fff; border:0; font-weight:bold; }
+  #done:disabled { background:#c4c7cb; }
+  .hint { font-size:12px; color:#666; margin-top:6px; text-align:center; }
+  .center { padding:40px 20px; text-align:center; }
+  .big { font-size:22px; font-weight:bold; color:var(--ok); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>const APP_INLINE = null; const API_URL = 'https://script.google.com/macros/s/AKfycbymmsqHjdWlvxDNX_jqvY66nj7WShRnqNTHYX4xXEQeHZkEbIzsukiytNg3iR1YBb5d4Q/exec';</script>
+<script>
+// Apps Script で開いたときは APP_INLINE にデータが入る。
+// GitHub Pages 版（tools/build_pages.py が作る）は APP_INLINE = null、API_URL に Apps Script の URL が入り、データを取りに行く。
+(async function () {
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const root = $('#app');
+  const API = typeof API_URL === 'string' ? API_URL : '';
+
+  let APP = APP_INLINE;
+  if (!APP) {
+    root.innerHTML = '<div class="center">読み込み中…</div>';
+    try {
+      const q = new URLSearchParams(location.search); q.set('api', 'data');
+      const res = await fetch(API + '?' + q.toString());
+      APP = await res.json();
+    } catch (e) {
+      root.innerHTML = '<div class="center">読み込めませんでした。電波の良い所で開き直してください。<br>（' + esc(e.message || e) + '）</div>';
+      return;
+    }
+  }
+
+  if (APP.error) { root.innerHTML = '<div class="center">' + esc(APP.error) + '</div>'; return; }
+
+  const KEY = 'kizai-check:' + APP.shipId;
+  const expected = APP.items.map((it) => it.no);
+  let st = { ok: [], manual: [], extras: [], removed: [], done: '' };
+  try { Object.assign(st, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) {}
+  if (APP.completedAt && !st.done) st.done = APP.completedAt;
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) {} };
+
+  if (st.done) { showDone(st.done, true); return; }
+
+  root.innerHTML =
+    '<header><h1>機材発送チェック</h1>' +
+    '<div class="sub">出荷ID ' + esc(APP.shipId) + (APP.to ? '　宛先 ' + esc(APP.to) : '') + '</div>' +
+    '<div class="bar"><i id="bar"></i></div><div class="count" id="count"></div></header>' +
+    '<label class="shot"><input id="photo" type="file" accept="image/*" capture="environment" hidden>' +
+    '<span id="shotlabel">📷 タグのQRを撮影して読み取る</span></label>' +
+    '<button id="start" class="live" hidden>カメラで連続読み取り</button>' +
+    '<div id="cam" hidden><video id="video" playsinline muted></video><div class="frame"></div>' +
+    '<div class="msg" id="cammsg"></div></div>' +
+    '<div id="toast"></div>' +
+    '<div class="manual"><input id="mno" type="number" inputmode="numeric" placeholder="QRが読めない時は番号を入力">' +
+    '<button id="madd">確定</button></div>' +
+    '<ul id="list"></ul>' +
+    (APP.refItems.length ? '<h2>番号なしの同梱品（参考・読み取り不要）</h2><ul class="ref">' +
+      APP.refItems.map((n) => '<li><span class="nm">' + esc(n) + '</span></li>').join('') + '</ul>' : '') +
+    '<footer><button id="done" disabled>完了して発注側に通知</button><div class="hint" id="hint"></div></footer>';
+
+  function render() {
+    const okN = expected.filter((n) => st.ok.includes(n)).length;
+    $('#bar').style.width = (okN / expected.length * 100) + '%';
+    $('#count').textContent = okN + ' / ' + expected.length + ' 点';
+    const pendingExtras = st.extras.filter((n) => !st.removed.includes(n));
+    const rows = APP.items.map((it) => {
+      const ok = st.ok.includes(it.no);
+      return '<li class="' + (ok ? 'ok' : '') + '"><span class="no">' + it.no + '</span>' +
+        '<span class="nm">' + esc(it.name) + (it.note ? '<span class="note">' + esc(it.note) + '</span>' : '') + '</span>' +
+        '<span class="st">' + (ok ? (st.manual.includes(it.no) ? '✓ 手入力' : '✓ OK') : '未') + '</span></li>';
+    });
+    pendingExtras.forEach((n) => {
+      const m = APP.master[n];
+      rows.unshift('<li class="extra"><span class="no">' + n + '</span><span class="nm">一覧にない機材：' +
+        esc(m ? m.name : '未登録') + '<span class="note">この機材は送りません。箱から取り除いてください</span></span>' +
+        '<button data-rm="' + n + '">取り除いた</button></li>');
+    });
+    $('#list').innerHTML = rows.join('');
+    const missing = expected.length - okN;
+    $('#done').disabled = missing > 0 || pendingExtras.length > 0;
+    $('#hint').textContent = missing > 0 ? 'あと ' + missing + ' 点。すべて読み取ると完了できます'
+      : pendingExtras.length ? '一覧にない機材を取り除いてから完了してください' : 'すべてそろいました';
+  }
+
+  let toastTimer;
+  function toast(cls, text) {
+    const t = $('#toast');
+    t.className = cls; t.textContent = text;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.className = ''; }, cls === 'ng' ? 6000 : 2500);
+  }
+
+  let actx;
+  function beep(ok) {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.frequency.value = ok ? 1200 : 300; o.type = ok ? 'sine' : 'square';
+      g.gain.value = 0.15; o.connect(g); g.connect(actx.destination);
+      o.start(); o.stop(actx.currentTime + (ok ? 0.12 : 0.5));
+    } catch (e) {}
+    if (navigator.vibrate) navigator.vibrate(ok ? 80 : [200, 100, 200]);
+  }
+
+  function accept(no, manual) {
+    if (expected.includes(no)) {
+      if (st.ok.includes(no)) { toast('info', no + '番は読み取り済みです'); return; }
+      st.ok.push(no); if (manual) st.manual.push(no);
+      const it = APP.items.find((i) => i.no === no);
+      toast('ok', '✓ ' + no + '番 ' + it.name); beep(true);
+    } else {
+      if (!st.extras.includes(no)) st.extras.push(no);
+      st.removed = st.removed.filter((n) => n !== no);
+      const m = APP.master[no];
+      toast('ng', '✕ ' + no + '番（' + (m ? m.name : '未登録') + '）は一覧にありません'); beep(false);
+    }
+    save(); render();
+  }
+
+  const re = new RegExp('^' + APP.qrPrefix.replace(/[-]/g, '\\-') + '(\\d{1,3})$');
+  let last = '', lastAt = 0;
+  function onCode(text) {
+    const now = Date.now();
+    if (text === last && now - lastAt < 2500) return;
+    last = text; lastAt = now;
+    const m = re.exec(String(text).trim());
+    if (!m) { toast('ng', '機材のQRではありません'); beep(false); return; }
+    accept(parseInt(m[1], 10), false);
+  }
+  window.__onCode = onCode; // 動作確認用
+
+  // ---- 写真で読み取る ----
+  // Apps Script の画面は Google の枠（iframe）の中で動き、ライブのカメラが許可されていない。
+  // 撮影した写真から読むので、どの端末でも使える。Android の Chrome なら1枚に写った複数のQRも読める。
+  async function readPhoto(file) {
+    const label = $('#shotlabel'), box = label.parentNode;
+    box.classList.add('busy'); label.textContent = '読み取り中…';
+    try {
+      const img = await loadImage(file);
+      const s = Math.min(1, 1600 / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s);
+      const cx = cv.getContext('2d', { willReadFrequently: true });
+      cx.drawImage(img, 0, 0, cv.width, cv.height);
+      let codes = [];
+      if ('BarcodeDetector' in window) {
+        try { codes = (await new BarcodeDetector({ formats: ['qr_code'] }).detect(cv)).map((r) => r.rawValue); } catch (e) {}
+      }
+      if (!codes.length) {
+        // jsQR は1枚に1つしか読めず、QRが複数写ると失敗するので、全体→半分→4分の1と区切って読む
+        if (!window.jsQR) await loadScript('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js');
+        const W = cv.width, H = cv.height, tiles = [[0, 0, 1, 1]];
+        [[0, 0, .6, 1], [.4, 0, .6, 1], [0, 0, 1, .6], [0, .4, 1, .6]].forEach((t) => tiles.push(t));
+        for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) tiles.push([x * .45, y * .45, .55, .55]);
+        tiles.forEach(([x, y, w, h]) => {
+          const d = cx.getImageData(Math.floor(x * W), Math.floor(y * H), Math.floor(w * W), Math.floor(h * H));
+          const r = jsQR(d.data, d.width, d.height);
+          if (r && r.data) codes.push(r.data);
+        });
+      }
+      if (!codes.length) { toast('ng', 'QRが見つかりません。QRを画面いっぱいに写して撮り直してください'); beep(false); }
+      [...new Set(codes)].forEach((c) => { last = ''; onCode(c); });
+    } catch (e) {
+      toast('ng', '写真を読めませんでした（' + (e.message || e) + '）');
+    } finally {
+      box.classList.remove('busy'); label.textContent = '📷 タグのQRを撮影して読み取る';
+    }
+  }
+  function loadImage(file) {
+    return new Promise((ok, ng) => {
+      const url = URL.createObjectURL(file), im = new Image();
+      im.onload = () => { URL.revokeObjectURL(url); ok(im); };
+      im.onerror = () => { URL.revokeObjectURL(url); ng(new Error('画像形式')); };
+      im.src = url;
+    });
+  }
+
+  // ---- カメラで連続読み取り（ライブのカメラが許可された場所に置いたときだけ表示） ----
+  async function startCamera() {
+    const msg = $('#cammsg');
+    $('#cam').hidden = false; $('#start').hidden = true;
+    msg.textContent = 'カメラを起動中…';
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    } catch (e) {
+      msg.innerHTML = 'カメラを使えません（' + esc(e.name || e) + '）。<br>上の「撮影して読み取る」を使ってください。';
+      return;
+    }
+    const video = $('#video');
+    video.srcObject = stream; await video.play();
+    msg.style.display = 'none';
+    let detect;
+    if ('BarcodeDetector' in window) {
+      const bd = new BarcodeDetector({ formats: ['qr_code'] });
+      detect = async () => { const r = await bd.detect(video); return r.length ? r[0].rawValue : null; };
+    } else {
+      await loadScript('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js');
+      const cv = document.createElement('canvas'), cx = cv.getContext('2d', { willReadFrequently: true });
+      detect = async () => {
+        const w = video.videoWidth, h = video.videoHeight; if (!w) return null;
+        const s = Math.min(1, 640 / w); cv.width = w * s; cv.height = h * s;
+        cx.drawImage(video, 0, 0, cv.width, cv.height);
+        const r = jsQR(cx.getImageData(0, 0, cv.width, cv.height).data, cv.width, cv.height, { inversionAttempts: 'dontInvert' });
+        return r ? r.data : null;
+      };
+    }
+    const loop = async () => {
+      try { const t = await detect(); if (t) onCode(t); } catch (e) {}
+      if (!st.done) setTimeout(loop, 200);
+    };
+    loop();
+  }
+  function loadScript(src) {
+    return new Promise((ok, ng) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = ng; document.head.appendChild(s); });
+  }
+
+  $('#photo').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) readPhoto(f); };
+  // ライブのカメラが使える場所（GitHub Pages 版）では、連続読み取りを大きなボタンにして先頭に出す
+  const fp = document.permissionsPolicy || document.featurePolicy;
+  const fpAllows = !!(fp && fp.allowsFeature && fp.allowsFeature('camera'));
+  const liveOk = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
+                    (API ? (!fp || fpAllows) : fpAllows));   // Apps Script の枠内では Safari でも出さない
+  $('#start').hidden = !liveOk;
+  if (liveOk) {
+    $('#start').className = 'shot'; $('#start').textContent = '📷 カメラをかざして連続で読み取る';
+    $('#start').style.width = 'calc(100% - 32px)'; $('#start').style.border = '0';
+    const photoBox = $('#shotlabel').parentNode;
+    photoBox.classList.add('sub-shot');
+    photoBox.parentNode.insertBefore($('#start'), photoBox);
+  }
+  $('#start').onclick = startCamera;
+  $('#madd').onclick = () => {
+    const n = parseInt($('#mno').value, 10);
+    if (!(n > 0)) return;
+    if (expected.includes(n) && !st.ok.includes(n) &&
+        !confirm(n + '番を手入力で確認済みにします。現物の番号を目で確かめましたか？')) return;
+    accept(n, true); $('#mno').value = '';
+  };
+  $('#list').onclick = (e) => {
+    const n = parseInt(e.target.getAttribute('data-rm'), 10);
+    if (n) { st.removed.push(n); save(); render(); }
+  };
+  $('#done').onclick = () => {
+    if (!confirm('発注側に完了を通知します。よろしいですか？')) return;
+    const btn = $('#done'); btn.disabled = true; btn.textContent = '送信中…';
+    const payload = { shipId: APP.shipId, to: APP.to, expected: expected, scanned: st.ok, manual: st.manual,
+                      extras: st.extras, device: navigator.userAgent };
+    const ok = (r) => { st.done = r.completedAt; save(); showDone(r.completedAt, false); };
+    const ng = (err) => { btn.textContent = '完了して発注側に通知'; render(); alert('送信できませんでした：' + (err.message || err)); };
+    if (window.google && google.script && google.script.run) {
+      google.script.run.withSuccessHandler(ok).withFailureHandler(ng).complete(payload);
+    } else {
+      // text/plain にすると、ブラウザの事前確認(CORS preflight)なしで Apps Script に送れる
+      fetch(API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) })
+        .then((res) => res.json())
+        .then((r) => (r.ok ? ok(r) : ng(new Error(r.error))))
+        .catch(ng);
+    }
+  };
+
+  render();
+
+  function showDone(at, already) {
+    const v = document.getElementById('video');
+    if (v && v.srcObject) v.srcObject.getTracks().forEach((t) => t.stop());
+    root.innerHTML = '<div class="center"><div class="big">✓ チェック完了</div>' +
+      '<p>出荷ID ' + esc(APP.shipId) + '<br>' + esc(at) + (already ? ' に完了済みです' : '　発注側に通知しました') + '</p></div>';
+  }
+})();
+</script>
+</body>
+</html>
