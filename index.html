@@ -112,7 +112,7 @@
     const rows = APP.items.map((it) => {
       const ok = st.ok.includes(it.no);
       return '<li class="' + (ok ? 'ok' : '') + '"><span class="no">' + it.no + '</span>' +
-        '<span class="nm">' + esc(it.name) + (it.note ? '<span class="note">' + esc(it.note) + '</span>' : '') + '</span>' +
+        '<span class="nm">' + esc(it.name) + '</span>' +
         '<span class="st">' + (ok ? (st.manual.includes(it.no) ? '✓ 手入力' : '✓ OK') : '未') + '</span></li>';
     });
     pendingExtras.forEach((n) => {
